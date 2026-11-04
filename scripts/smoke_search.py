@@ -1,4 +1,4 @@
-"""Search one image with real engines, without sending bot messages."""
+"""Search one image with Google Lens, without sending bot messages."""
 
 import argparse
 import asyncio
@@ -15,8 +15,6 @@ async def run(args):
     config = (
         json.loads(args.config.read_text(encoding="utf-8-sig")) if args.config else {}
     )
-    if args.engines is not None:
-        config["engines"] = args.engines
     if args.timeout is not None:
         config["search_timeout"] = args.timeout
     service = SearchService(config)
@@ -34,6 +32,5 @@ if __name__ == "__main__":
     parser.add_argument(
         "--config", type=Path, help="Read plugin config without printing API keys"
     )
-    parser.add_argument("--engines", nargs="+")
     parser.add_argument("--timeout", type=int)
     sys.exit(asyncio.run(run(parser.parse_args())))

@@ -1,4 +1,4 @@
-"""Reverse image search and conservative extraction of public source accounts."""
+"""Google Lens exact image search and X source recovery."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from typing import Any
 from urllib.parse import parse_qs, unquote, urlsplit, urlunsplit
 
 from httpx2 import AsyncClient
-from PicImageSearch import Ascii2D, BaiDu, GoogleLens, Network, SauceNAO
+from PicImageSearch import GoogleLens, Network
 from pyquery import PyQuery
 
 if __package__:
@@ -36,7 +36,6 @@ else:
 UNKNOWN_ACCOUNT = "未提供"
 TITLE_LLM_TIMEOUT = 30
 logger = logging.getLogger(__name__)
-_ENGINES = ("google_lens", "baidu", "ascii2d", "saucenao")
 _X_HOSTS = {
     "x.com",
     "www.x.com",
@@ -44,21 +43,6 @@ _X_HOSTS = {
     "twitter.com",
     "www.twitter.com",
     "mobile.twitter.com",
-}
-_WEIBO_HOSTS = {
-    "weibo.com",
-    "www.weibo.com",
-    "m.weibo.com",
-    "weibo.cn",
-    "www.weibo.cn",
-    "m.weibo.cn",
-}
-_BILI_HOSTS = {
-    "bilibili.com",
-    "www.bilibili.com",
-    "m.bilibili.com",
-    "space.bilibili.com",
-    "t.bilibili.com",
 }
 _X_RESERVED = {
     "home",
@@ -164,24 +148,6 @@ def _platform_account(url: str) -> tuple[str, str]:
         ):
             return "X", f"@{parts[0]}"
         return "X", UNKNOWN_ACCOUNT
-    if host in _WEIBO_HOSTS:
-        if len(parts) >= 2 and parts[0] in {"u", "profile"} and parts[1].isdigit():
-            return "微博", f"UID {parts[1]}"
-        if len(parts) >= 2 and parts[0] == "n":
-            return "微博", f"@{parts[1]}"
-        if parts and parts[0].isdigit() and host != "m.weibo.cn":
-            return "微博", f"UID {parts[0]}"
-        if (
-            host in {"weibo.com", "www.weibo.com"}
-            and len(parts) == 1
-            and parts[0] not in {"login", "signup", "newlogin", "tv", "hot", "search"}
-        ):
-            return "微博", f"@{parts[0]}"
-        return "微博", UNKNOWN_ACCOUNT
-    if host in _BILI_HOSTS:
-        if host == "space.bilibili.com" and parts and parts[0].isdigit():
-            return "哔哩哔哩", f"UID {parts[0]}"
-        return "哔哩哔哩", UNKNOWN_ACCOUNT
     return "其他", UNKNOWN_ACCOUNT
 
 
@@ -213,8 +179,6 @@ def normalize_url(value: Any) -> str:
                 "",
             )
         )
-    if host in _WEIBO_HOSTS or host in _BILI_HOSTS:
-        return urlunsplit(("https", parsed.netloc, path, "", ""))
     return urlunsplit((parsed.scheme, parsed.netloc, path, parsed.query, ""))
 
 
@@ -384,31 +348,13 @@ def _make_result(
     )
 
 
-def parse_results(
-    response: Any, engine: str, match_type: str = "visual"
-) -> list[SearchResult]:
-    """Flatten engine result links without inferring identities from images or titles."""
-    results: list[SearchResult] = []
-    groups = [(getattr(response, "raw", []), match_type)]
-    if engine == "baidu":
-        groups.insert(0, (getattr(response, "exact_matches", []), "exact"))
-    for items, kind in groups:
-        for item in items:
-            links = [getattr(item, "url", "")]
-            # Ascii2D includes author profile links in url_list: keep its primary
-            # post when present and only use the list when the primary is absent.
-            if not links[0] and engine == "ascii2d":
-                links.extend(
-                    getattr(link, "href", "") for link in getattr(item, "url_list", [])
-                )
-            if engine == "saucenao":
-                if float(getattr(item, "similarity", 0) or 0) < 60:
-                    continue
-                links.extend(getattr(item, "ext_urls", []))
-            for url in links:
-                result = _make_result(item, url, engine, kind)
-                if result:
-                    results.append(result)
+def parse_results(response: Any) -> list[SearchResult]:
+    """Parse Google Lens exact matches, retaining source pages for X recovery."""
+    results = []
+    for item in getattr(response, "raw", []):
+        result = _make_result(item, getattr(item, "url", ""), "google_lens", "exact")
+        if result:
+            results.append(result)
     return results
 
 
@@ -440,7 +386,6 @@ async def _check_response(response: Any) -> None:
             marker in page
             for marker in (
                 "<title>just a moment",
-                "<title>百度安全验证",
                 "<title>安全验证",
                 "<title>captcha",
             )
@@ -450,71 +395,41 @@ async def _check_response(response: Any) -> None:
 
 class SearchService:
     def __init__(self, config: Mapping[str, Any], twitter_api_provider=None):
-        selected = config.get("engines", ["google_lens", "baidu", "ascii2d"])
-        if isinstance(selected, str):
-            selected = [part.strip() for part in selected.split(",") if part.strip()]
-        self.engines = list(dict.fromkeys(selected))
-        self.api_key = str(config.get("saucenao_api_key", "") or "").strip()
         self.serpapi_api_key = str(config.get("serpapi_api_key", "") or "").strip()
-        if self.api_key and "saucenao" not in self.engines:
-            self.engines.append("saucenao")
         self.proxy = str(config.get("proxy", "") or "").strip() or None
         self.timeout = max(1.0, float(config.get("search_timeout", 25)))
         self.x_lookup_timeout = max(
             5, min(30, float(config.get("x_lookup_timeout", 20)))
         )
         self.twitter_api_provider = twitter_api_provider
-        self._semaphore = asyncio.Semaphore(3)
 
-    async def _search_engine(self, engine: str, image: bytes) -> list[SearchResult]:
-        if engine not in _ENGINES:
-            raise _EngineUnavailable("不支持的搜索引擎")
-        if engine == "saucenao" and not self.api_key:
-            raise _EngineUnavailable("未配置 SauceNAO API key")
-        async with self._semaphore:
-            if engine == "google_lens" and self.serpapi_api_key:
-                try:
-                    payload = await search_serpapi(
-                        image, self.serpapi_api_key, self.timeout, self.proxy
-                    )
-                except GoogleAPIError as exc:
-                    raise _EngineUnavailable(str(exc)) from exc
-                results = []
-                for item in payload.get("exact_matches", []):
-                    result = _make_result(
-                        SimpleNamespace(
-                            title=item.get("title", ""), source=item.get("source", "")
-                        ),
-                        item.get("link", ""),
-                        engine,
-                        "exact",
-                    )
-                    if result:
-                        results.append(result)
-                return results
-            async with Network(proxies=self.proxy, timeout=self.timeout) as client:
-                client.event_hooks["response"].append(_check_response)
-                if engine == "google_lens":
-                    exact = await GoogleLens(
-                        client=client, search_type="exact_matches"
-                    ).search(file=image)
-                    return parse_results(exact, engine, "exact")
-                if engine == "baidu":
-                    return parse_results(
-                        await BaiDu(client=client).search(file=image), engine
-                    )
-                if engine == "ascii2d":
-                    return parse_results(
-                        await Ascii2D(client=client).search(file=image), engine
-                    )
-                response = await SauceNAO(
-                    client=client, api_key=self.api_key, numres=10, minsim=60
-                ).search(file=image)
-                if response.status is not None and response.status < 0:
-                    raise _EngineUnavailable(
-                        "SauceNAO 拒绝请求，请检查 API key 或查询额度"
-                    )
-                return parse_results(response, engine, "similarity")
+    async def _search_lens(self, image: bytes) -> list[SearchResult]:
+        if self.serpapi_api_key:
+            try:
+                payload = await search_serpapi(
+                    image, self.serpapi_api_key, self.timeout, self.proxy
+                )
+            except GoogleAPIError as exc:
+                raise _EngineUnavailable(str(exc)) from exc
+            results = []
+            for item in payload.get("exact_matches", []):
+                result = _make_result(
+                    SimpleNamespace(
+                        title=item.get("title", ""), source=item.get("source", "")
+                    ),
+                    item.get("link", ""),
+                    "google_lens",
+                    "exact",
+                )
+                if result:
+                    results.append(result)
+            return results
+        async with Network(proxies=self.proxy, timeout=self.timeout) as client:
+            client.event_hooks["response"].append(_check_response)
+            response = await GoogleLens(
+                client=client, search_type="exact_matches"
+            ).search(file=image)
+            return parse_results(response)
 
     async def _source_account(
         self, result: SearchResult, image: bytes | None = None
@@ -528,7 +443,6 @@ class SearchService:
         parsed = urlsplit(url)
         endpoint = ""
         params: dict[str, str] = {}
-        kind = ""
         if parsed.hostname in _X_HOSTS:
             if status := re.search(r"/status/(\d+)(?:/|$)", parsed.path):
                 try:
@@ -602,16 +516,6 @@ class SearchService:
                     "url": f"https://twitter.com/i/status/{status[1]}",
                     "omit_script": "true",
                 }
-                kind = "x"
-        elif parsed.hostname in _BILI_HOSTS:
-            if video := re.search(r"/video/(BV[A-Za-z0-9]{10})(?:/|$)", parsed.path):
-                endpoint = "https://api.bilibili.com/x/web-interface/view"
-                params = {"bvid": video[1]}
-                kind = "video"
-            elif article := re.search(r"/read/cv(\d+)(?:/|$)", parsed.path):
-                endpoint = "https://api.bilibili.com/x/article/viewinfo"
-                params = {"id": article[1]}
-                kind = "article"
         if not endpoint:
             return result
         try:
@@ -625,38 +529,25 @@ class SearchService:
                 )
                 response.raise_for_status()
                 payload = response.json()
-                if kind == "x":
-                    author_url = public_url(payload.get("author_url", ""))
-                    platform, account = _platform_account(author_url)
-                    if platform == "X" and account != UNKNOWN_ACCOUNT:
-                        same_author = (
-                            _platform_account(result.url)[1].casefold()
-                            == account.casefold()
-                        )
-                        return replace(
-                            result,
-                            account=account,
-                            name=str(payload.get("author_name", "") or "")[:100],
-                            url=canonical_x_url(
-                                f"https://x.com/{account.lstrip('@')}/status/{status[1]}"
-                            )
-                            or result.url,
-                            clue_strength=result.clue_strength if same_author else 0,
-                            source_hosts=result.source_hosts if same_author else (),
-                        )
-                    return result
-                data = payload.get("data", {}) if payload.get("code") == 0 else {}
-                owner = data.get("owner", {}) if kind == "video" else data
-                mid = str(owner.get("mid", ""))
-                if mid.isdigit():
+                author_url = public_url(payload.get("author_url", ""))
+                platform, account = _platform_account(author_url)
+                if platform == "X" and account != UNKNOWN_ACCOUNT:
+                    same_author = (
+                        _platform_account(result.url)[1].casefold()
+                        == account.casefold()
+                    )
                     return replace(
                         result,
-                        account=f"UID {mid}",
-                        name=str(
-                            owner.get("name" if kind == "video" else "author_name", "")
-                            or ""
-                        )[:100],
+                        account=account,
+                        name=str(payload.get("author_name", "") or "")[:100],
+                        url=canonical_x_url(
+                            f"https://x.com/{account.lstrip('@')}/status/{status[1]}"
+                        )
+                        or result.url,
+                        clue_strength=result.clue_strength if same_author else 0,
+                        source_hosts=result.source_hosts if same_author else (),
                     )
+                return result
         except Exception:
             # Missing account metadata must not discard an otherwise usable source.
             pass
@@ -672,31 +563,27 @@ class SearchService:
             report.errors["image"] = "图片内容为空"
             return report
 
-        async def run(engine: str) -> tuple[str, list[SearchResult], str]:
-            try:
-                results = await asyncio.wait_for(
-                    self._search_engine(engine, image), timeout=self.timeout
-                )
-                return engine, results, ""
-            except TimeoutError:
-                return engine, [], "搜索超时"
-            except _EngineUnavailable as exc:
-                return engine, [], str(exc)
-            except Exception:
-                # Exception strings can contain proxy credentials or SauceNAO URLs.
-                return engine, [], "搜索请求或结果解析失败"
-
-        collected = await asyncio.gather(*(run(engine) for engine in self.engines))
+        report.engine_results["google_lens"] = 0
+        try:
+            results = await asyncio.wait_for(
+                self._search_lens(image), timeout=self.timeout
+            )
+        except TimeoutError:
+            report.errors["google_lens"] = "搜索超时"
+            return report
+        except _EngineUnavailable as exc:
+            report.errors["google_lens"] = str(exc)
+            return report
+        except Exception:
+            report.errors["google_lens"] = "搜索请求或结果解析失败"
+            return report
+        report.engine_results["google_lens"] = len(results)
         unique: dict[str, SearchResult] = {}
-        for engine, results, error in collected:
-            report.engine_results[engine] = len(results)
-            if error:
-                report.errors[engine] = error
-            for result in results:
-                key = _result_key(result)
-                unique[key] = (
-                    _merge_result(unique[key], result) if key in unique else result
-                )
+        for result in results:
+            key = _result_key(result)
+            unique[key] = (
+                _merge_result(unique[key], result) if key in unique else result
+            )
         report.exact_sources = [item for item in unique.values() if item.verified]
         exact_sources = [
             {"url": item.url, "title": item.title}

@@ -663,11 +663,11 @@ def test_prepare_image_rejects_empty_corrupt_and_oversized_uploads(data):
         main.prepare_image(data)
 
 
-def test_format_report_preserves_partial_engine_failure():
-    text = main.format_report(SearchReport(errors={"baidu": "搜索超时"}))
+def test_format_report_preserves_lens_failure():
+    text = main.format_report(SearchReport(errors={"google_lens": "搜索超时"}))
     assert "不能据此判断图片没有出处" in text
     assert "这次没有找到可用的图片出处" not in text
-    assert "baidu（搜索超时）" in text
+    assert "google_lens（搜索超时）" in text
 
 
 def test_format_report_only_calls_completed_empty_search_not_found():
@@ -784,9 +784,9 @@ def test_format_report_selected_result_is_exactly_five_lines_and_hides_diagnosti
                 selection_reason="内部排序原因不显示",
             ),
         ],
-        errors={"baidu": "搜索超时"},
+        errors={"x_verify": "X 帖子图像核实暂不可用"},
         exact_sources=[SearchResult(title="PRIVATE_TITLE_SENTINEL", verified=True)],
-        engine_results={"google_lens": 1, "baidu": 0},
+        engine_results={"google_lens": 1},
         source_pages={"source.example": "HTTP 403"},
         x_candidate_count=1,
     )

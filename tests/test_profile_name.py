@@ -33,10 +33,8 @@ def twitter_api():
 @pytest.mark.asyncio
 async def test_profile_result_gets_name_from_borrowed_twitter_api():
     api = twitter_api()
-    service = SearchService(
-        {"engines": ["google_lens"]}, twitter_api_provider=lambda: api
-    )
-    service._search_engine = AsyncMock(
+    service = SearchService({}, twitter_api_provider=lambda: api)
+    service._search_lens = AsyncMock(
         return_value=[result(verified=True, engine="google_lens")]
     )
     report = await service.search(b"image")
@@ -48,10 +46,8 @@ async def test_profile_result_gets_name_from_borrowed_twitter_api():
 @pytest.mark.asyncio
 async def test_recovered_account_clue_also_gets_profile_name_without_claiming_match():
     api = twitter_api()
-    service = SearchService(
-        {"engines": ["google_lens"]}, twitter_api_provider=lambda: api
-    )
-    service._search_engine = AsyncMock(
+    service = SearchService({}, twitter_api_provider=lambda: api)
+    service._search_lens = AsyncMock(
         return_value=[
             SearchResult(
                 url="https://example.org/photo",
@@ -79,11 +75,9 @@ async def test_recovered_account_clue_also_gets_profile_name_without_claiming_ma
 @pytest.mark.asyncio
 async def test_profile_lookup_runs_only_for_selected_unknown_name():
     api = twitter_api()
-    service = SearchService(
-        {"engines": ["google_lens"]}, twitter_api_provider=lambda: api
-    )
+    service = SearchService({}, twitter_api_provider=lambda: api)
     other = SearchResult(platform="X", url="https://x.com/other", verified=True)
-    service._search_engine = AsyncMock(return_value=[result(verified=True), other])
+    service._search_lens = AsyncMock(return_value=[result(verified=True), other])
     report = await service.search(b"image")
     assert len(report.results) == 1
     api.get_user_info.assert_awaited_once_with("_ayameayame")

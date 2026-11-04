@@ -11,14 +11,8 @@
     "default": [],
     "hint": "每项填写一个 QQ 号；空名单不允许私聊使用。此名单不放行群聊。"
   },
-  "engines": {
-    "description": "启用的识图引擎",
-    "type": "list",
-    "default": ["google_lens", "baidu", "ascii2d"],
-    "hint": "可选 google_lens、baidu、ascii2d、saucenao；配置 SauceNAO Key 后会自动加入 SauceNAO。"
-  },
   "proxy": {
-    "description": "识图引擎代理",
+    "description": "Google Lens 和 X 来源追查代理",
     "type": "string",
     "default": "",
     "hint": "例如 http://127.0.0.1:7890。容器内的 127.0.0.1 指向容器自身；留空直连。"
@@ -55,15 +49,9 @@
     "hint": "5–30 秒。会读取匹配页面并按线索搜索 X；疑似账号不会当作已确认同图。"
   },
   "search_timeout": {
-    "description": "每个引擎的最长检索时间（秒）",
+    "description": "Google Lens 最长检索时间（秒）",
     "type": "int",
     "default": 30
-  },
-  "saucenao_api_key": {
-    "description": "SauceNAO API Key（可选）",
-    "type": "string",
-    "default": "",
-    "secret": true
   },
   "cooldown_seconds": {
     "description": "同一用户在同一会话的请求间隔（秒）",

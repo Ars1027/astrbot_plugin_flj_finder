@@ -10,8 +10,6 @@ from unittest.mock import AsyncMock, patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from PicImageSearch.model import (
-    Ascii2DResponse,
-    BaiDuResponse,
     GoogleLensExactMatchesResponse,
 )
 
@@ -30,20 +28,6 @@ from x_recovery import RecoveryReport, XCandidate
 
 
 class ParserTests(unittest.TestCase):
-    def test_ascii2d_real_parser_keeps_post_and_explicit_account(self):
-        html = """<html><body><div class="row item-box"><img src="/thumb.jpg">
-        <div class="hash">abcdef</div><small>100x100 JPG</small>
-        <div class="detail-box gray-link"><small>twitter</small>
-        <a href="https://twitter.com/example/status/12345">Post title</a>
-        <a href="https://twitter.com/example">Display name</a></div></div></body></html>"""
-        response = Ascii2DResponse(html, "https://ascii2d.net/search/color/test")
-        results = parse_results(response, "ascii2d")
-        self.assertEqual(len(results), 1)
-        self.assertEqual(results[0].url, "https://x.com/example/status/12345")
-        self.assertEqual(results[0].account, "@example")
-        self.assertEqual(results[0].name, "Display name")
-        self.assertFalse(results[0].verified)
-
     def test_lens_exact_real_parser_has_match_evidence_without_inferred_author(self):
         html = """<div class="YxbOwd"><a class="ngTNl"
         href="https://x.com/i/status/12345"><span class="ZhosBf">Someone's name</span>
@@ -51,41 +35,11 @@ class ParserTests(unittest.TestCase):
         response = GoogleLensExactMatchesResponse(
             html, "https://www.google.com/search?udm=48"
         )
-        results = parse_results(response, "google_lens", "exact")
+        results = parse_results(response)
         self.assertEqual(len(results), 1)
         self.assertTrue(results[0].verified)
         self.assertEqual(results[0].account, UNKNOWN_ACCOUNT)
         self.assertEqual(results[0].name, "")
-
-    def test_baidu_exact_and_visual_are_distinct(self):
-        response = BaiDuResponse(
-            {
-                "same": {
-                    "list": [
-                        {
-                            "url": "https://weibo.com/123456/postABC",
-                            "image_src": "https://example.com/a.jpg",
-                            "title": ["same image"],
-                        }
-                    ]
-                },
-                "data": {
-                    "list": [
-                        {
-                            "fromUrl": "https://www.bilibili.com/video/BV1234567890",
-                            "thumbUrl": "https://example.com/b.jpg",
-                            "title": ["visual match"],
-                        }
-                    ]
-                },
-            },
-            "https://graph.baidu.com/result",
-        )
-        results = parse_results(response, "baidu")
-        self.assertEqual(results[0].account, "UID 123456")
-        self.assertTrue(results[0].verified)
-        self.assertEqual(results[1].account, UNKNOWN_ACCOUNT)
-        self.assertFalse(results[1].verified)
 
     def test_x_domains_and_photo_suffix_normalize(self):
         self.assertEqual(
@@ -117,7 +71,7 @@ class ParserTests(unittest.TestCase):
                 )
             ]
         )
-        self.assertEqual(parse_results(response, "google_lens")[0].platform, "其他")
+        self.assertEqual(parse_results(response)[0].platform, "其他")
 
 
 class ServiceTests(unittest.IsolatedAsyncioTestCase):
@@ -134,10 +88,10 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
             get_tweet=AsyncMock(return_value={"status": False}),
         )
         service = SearchService(
-            {"engines": ["google_lens"], "serpapi_api_key": "test-key"},
+            {"serpapi_api_key": "test-key"},
             twitter_api_provider=lambda: api,
         )
-        service._search_engine = AsyncMock(
+        service._search_lens = AsyncMock(
             return_value=[
                 SearchResult(
                     url="https://source.example/photo",
@@ -178,8 +132,8 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(report.results[0].clue_strength, 0)
 
     async def test_llm_metadata_includes_unknown_platform_for_recovery_fallback(self):
-        service = SearchService({"engines": ["google_lens"]})
-        service._search_engine = AsyncMock(
+        service = SearchService({})
+        service._search_lens = AsyncMock(
             return_value=[
                 SearchResult(
                     url="https://source.example/photo",
@@ -212,8 +166,8 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_llm_failure_falls_back_to_rules_without_logging_response(self):
-        service = SearchService({"engines": ["google_lens"]})
-        service._search_engine = AsyncMock(
+        service = SearchService({})
+        service._search_lens = AsyncMock(
             return_value=[
                 SearchResult(
                     url="https://source.example/photo",
@@ -234,8 +188,8 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("SECRET_SENTINEL", repr(report))
 
     async def test_direct_x_match_does_not_spend_llm_request(self):
-        service = SearchService({"engines": ["google_lens"]})
-        service._search_engine = AsyncMock(
+        service = SearchService({})
+        service._search_lens = AsyncMock(
             return_value=[
                 SearchResult(
                     platform="X",
@@ -250,13 +204,13 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
         extractor.assert_not_awaited()
 
     async def test_blocked_page_retains_exact_metadata_and_stage_counts(self):
-        service = SearchService({"engines": ["google_lens"]})
+        service = SearchService({})
         source = SearchResult(
             url="https://source.example/photo",
             title="A landscape photograph",
             verified=True,
         )
-        service._search_engine = AsyncMock(return_value=[source])
+        service._search_lens = AsyncMock(return_value=[source])
         recovery = RecoveryReport(
             errors={"source_page": "部分精确匹配来源页面无法读取"},
             source_pages={"source.example": "HTTP 403"},
@@ -270,8 +224,8 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(report.x_candidate_count, 0)
 
     async def test_empty_engine_records_zero_without_fabricating_sources(self):
-        service = SearchService({"engines": ["google_lens"]})
-        service._search_engine = AsyncMock(return_value=[])
+        service = SearchService({})
+        service._search_lens = AsyncMock(return_value=[])
         with patch("search.recover_x", AsyncMock()) as recover:
             report = await service.search(b"image")
         recover.assert_not_awaited()
@@ -281,8 +235,8 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(report.errors, {})
 
     async def test_exact_x_skips_recovery_and_non_x_is_never_returned(self):
-        service = SearchService({"engines": ["google_lens"]})
-        service._search_engine = AsyncMock(
+        service = SearchService({})
+        service._search_lens = AsyncMock(
             return_value=[
                 SearchResult(
                     platform="X", url="https://x.com/artist/status/123", verified=True
@@ -301,10 +255,10 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
     async def test_non_x_exact_sources_feed_recovery_with_paid_query_cap(self):
         borrowed = object()
         service = SearchService(
-            {"engines": ["google_lens"], "serpapi_api_key": "test-key"},
+            {"serpapi_api_key": "test-key"},
             twitter_api_provider=lambda: borrowed,
         )
-        service._search_engine = AsyncMock(
+        service._search_lens = AsyncMock(
             return_value=[
                 SearchResult(
                     platform="其他",
@@ -351,9 +305,9 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([r.match_type for r in report.results], ["recovered"])
 
     async def test_recovery_timeout_is_reported_without_returning_non_x(self):
-        service = SearchService({"engines": ["google_lens"]})
+        service = SearchService({})
         service.x_lookup_timeout = 0.01
-        service._search_engine = AsyncMock(
+        service._search_lens = AsyncMock(
             return_value=[
                 SearchResult(
                     platform="其他", url="https://example.org/post", verified=True
@@ -370,7 +324,7 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("超时", report.errors["x_lookup"])
 
     async def test_explicit_handle_seed_is_prioritized_over_repeated_hosts(self):
-        service = SearchService({"engines": ["google_lens"]})
+        service = SearchService({})
         seeds = [
             SearchResult(
                 url=f"https://example.org/page/{i}", title="Album - page", verified=True
@@ -384,7 +338,7 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
                 verified=True,
             )
         )
-        service._search_engine = AsyncMock(return_value=seeds)
+        service._search_lens = AsyncMock(return_value=seeds)
         with patch(
             "search.recover_x", new=AsyncMock(return_value=RecoveryReport())
         ) as recover:
@@ -394,9 +348,7 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(sources[0]["title"], "昵称@artist - Twitter Profile")
 
     async def test_configured_google_api_key_skips_direct_google_requests(self):
-        service = SearchService(
-            {"engines": ["google_lens"], "serpapi_api_key": "test-key"}
-        )
+        service = SearchService({"serpapi_api_key": "test-key"})
         service._source_account = AsyncMock(side_effect=lambda result, *args: result)
         with (
             patch("search.Network") as direct,
@@ -422,9 +374,7 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(report.results[0].verified)
 
     async def test_google_api_failure_is_not_a_successful_empty_search(self):
-        service = SearchService(
-            {"engines": ["google_lens"], "serpapi_api_key": "secret-key"}
-        )
+        service = SearchService({"serpapi_api_key": "secret-key"})
         with patch(
             "search.search_serpapi",
             new=AsyncMock(
@@ -437,7 +387,7 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("secret-key", str(report))
 
     async def test_lens_exact_only_uses_image_bytes_and_closes_owned_client(self):
-        service = SearchService({"engines": ["google_lens"]})
+        service = SearchService({})
         service._source_account = AsyncMock(side_effect=lambda result, *args: result)
         calls = []
         lifecycle = []
@@ -480,7 +430,7 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(report.results), 0)
 
     async def test_timeout_cancellation_closes_owned_client(self):
-        service = SearchService({"engines": ["google_lens"]})
+        service = SearchService({})
         service.timeout = 0.02
         closed = []
         client = SimpleNamespace(event_hooks={"response": []})
@@ -505,151 +455,12 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(report.errors, {"google_lens": "搜索超时"})
         self.assertEqual(closed, [True])
 
-    async def test_ranking_evidence_before_platform_and_status_dedup(self):
-        service = SearchService(
-            {"engines": ["google_lens", "baidu", "ascii2d"], "max_results": 3}
-        )
-        service._source_account = AsyncMock(side_effect=lambda result, *args: result)
-
-        async def engine_results(engine, image):
-            if engine == "google_lens":
-                return [
-                    SearchResult(
-                        platform="X", url="https://x.com/i/status/123", engine=engine
-                    ),
-                    SearchResult(
-                        platform="X",
-                        account="@other",
-                        url="https://x.com/other/status/222",
-                        engine=engine,
-                        match_type="exact",
-                        verified=True,
-                    ),
-                ]
-            if engine == "baidu":
-                return [
-                    SearchResult(
-                        platform="微博",
-                        account="UID 456",
-                        url="https://weibo.com/456/post",
-                        engine=engine,
-                        match_type="exact",
-                        verified=True,
-                    )
-                ]
-            return [
-                SearchResult(
-                    platform="X",
-                    account="@source",
-                    url="https://x.com/source/status/123",
-                    engine=engine,
-                )
-            ]
-
-        service._search_engine = engine_results
-        report = await service.search(b"image")
-        self.assertEqual(
-            [item.url for item in report.results],
-            [
-                "https://x.com/other/status/222",
-            ],
-        )
-        self.assertEqual(report.errors, {})
-
-    async def test_same_x_post_combines_exact_evidence_and_known_account(self):
-        exact = SearchResult(
-            platform="X",
-            url="https://x.com/i/status/123",
-            engine="google_lens",
-            match_type="exact",
-            verified=True,
-        )
-        visual = SearchResult(
-            platform="X",
-            url="https://x.com/artist/status/123",
-            account="@artist",
-            name="Artist Name",
-            engine="ascii2d",
-        )
-        for order in (["google_lens", "ascii2d"], ["ascii2d", "google_lens"]):
-            with self.subTest(order=order):
-                service = SearchService({"engines": order})
-                service._source_account = AsyncMock(
-                    side_effect=lambda result, *args: result
-                )
-
-                async def engine_results(engine, image):
-                    return [exact if engine == "google_lens" else visual]
-
-                service._search_engine = engine_results
-                report = await service.search(b"image")
-                self.assertEqual(len(report.results), 1)
-                result = report.results[0]
-                self.assertTrue(result.verified)
-                self.assertEqual(result.match_type, "exact")
-                self.assertEqual(result.engine, "google_lens")
-                self.assertEqual(result.account, "@artist")
-                self.assertEqual(result.name, "Artist Name")
-                self.assertEqual(result.url, "https://x.com/artist/status/123")
-
-    async def test_partial_failure_preserves_results_and_redacts_exception(self):
-        service = SearchService({"engines": ["google_lens", "baidu", "ascii2d"]})
-
-        async def engine_results(engine, image):
-            if engine == "google_lens":
-                raise RuntimeError("https://name:secret@proxy.invalid api_key=private")
-            if engine == "baidu":
-                raise _EngineUnavailable("搜索服务返回 HTTP 403")
-            return [
-                SearchResult(
-                    platform="X",
-                    url="https://x.com/example/status/123",
-                    engine=engine,
-                    verified=True,
-                )
-            ]
-
-        service._search_engine = engine_results
-        report = await service.search(b"image")
-        self.assertEqual(len(report.results), 1)
-        self.assertEqual(set(report.errors), {"google_lens", "baidu"})
-        self.assertNotIn("secret", str(report.errors))
-        self.assertIn("403", report.errors["baidu"])
-
-    async def test_engine_timeout_isolated(self):
-        service = SearchService({"engines": ["google_lens", "baidu"]})
-        service.timeout = 0.02
-
-        async def engine_results(engine, image):
-            if engine == "google_lens":
-                await asyncio.sleep(1)
-            return [
-                SearchResult(
-                    platform="X",
-                    url="https://x.com/example/status/123",
-                    engine=engine,
-                    verified=True,
-                )
-            ]
-
-        service._search_engine = engine_results
-        report = await service.search(b"image")
-        self.assertEqual(report.errors, {"google_lens": "搜索超时"})
-        self.assertEqual(len(report.results), 1)
-
-    async def test_empty_image_and_optional_saucenao(self):
-        service = SearchService({"saucenao_api_key": "placeholder"})
-        self.assertIn("saucenao", service.engines)
-        report = await service.search(b"")
-        self.assertEqual(report.errors, {"image": "图片内容为空"})
-        await service.close()
-
     async def test_http_and_challenge_detection(self):
         with self.assertRaisesRegex(_EngineUnavailable, "429"):
             await _check_response(SimpleNamespace(status_code=429))
         response = SimpleNamespace(
             status_code=200,
-            url="https://ascii2d.net/",
+            url="https://lens.google.com/",
             headers={"content-type": "text/html"},
             text="<title>Just a moment...</title>",
             aread=AsyncMock(),
@@ -696,50 +507,6 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
             aread=AsyncMock(),
         )
         await _check_response(response)
-
-    async def test_bilibili_owner_comes_only_from_public_video_metadata(self):
-        service = SearchService({})
-        result = SearchResult(
-            platform="哔哩哔哩",
-            url="https://www.bilibili.com/video/BV1234567890",
-            title="Title not used as author",
-        )
-        response = SimpleNamespace(
-            raise_for_status=lambda: None,
-            json=lambda: {
-                "code": 0,
-                "data": {"owner": {"mid": 456, "name": "Uploader"}},
-            },
-        )
-        client = SimpleNamespace(get=AsyncMock(return_value=response))
-
-        class FakeNetwork:
-            async def __aenter__(self):
-                return client
-
-            async def __aexit__(self, *args):
-                return None
-
-        with patch("search.Network", return_value=FakeNetwork()):
-            found = await service._source_account(result)
-        self.assertEqual(found.account, "UID 456")
-        self.assertEqual(found.name, "Uploader")
-        self.assertFalse(found.verified)
-        self.assertEqual(
-            client.get.call_args.args[0],
-            "https://api.bilibili.com/x/web-interface/view",
-        )
-        self.assertEqual(
-            client.get.call_args.kwargs["params"], {"bvid": "BV1234567890"}
-        )
-
-    async def test_bilibili_lookup_failure_does_not_lose_source(self):
-        service = SearchService({})
-        result = SearchResult(
-            platform="哔哩哔哩", url="https://www.bilibili.com/video/BV1234567890"
-        )
-        with patch("search.Network", side_effect=OSError("offline")):
-            self.assertEqual(await service._source_account(result), result)
 
     async def test_x_public_oembed_adds_explicit_author_metadata(self):
         service = SearchService({})
@@ -853,36 +620,6 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
         with patch("search.Network", side_effect=OSError("offline")):
             found = await service._source_account(result)
         self.assertEqual(found, result)
-
-    async def test_bilibili_article_uses_live_verified_author_fields(self):
-        service = SearchService({})
-        result = SearchResult(
-            platform="哔哩哔哩", url="https://www.bilibili.com/read/cv9117807"
-        )
-        response = SimpleNamespace(
-            raise_for_status=lambda: None,
-            json=lambda: {
-                "code": 0,
-                "data": {"mid": 431699647, "author_name": "Uploader"},
-            },
-        )
-        client = SimpleNamespace(get=AsyncMock(return_value=response))
-
-        class FakeNetwork:
-            async def __aenter__(self):
-                return client
-
-            async def __aexit__(self, *args):
-                return None
-
-        with patch("search.Network", return_value=FakeNetwork()):
-            found = await service._source_account(result)
-        self.assertEqual(found.name, "Uploader")
-        self.assertEqual(found.account, "UID 431699647")
-        self.assertEqual(
-            client.get.call_args.args[0], "https://api.bilibili.com/x/article/viewinfo"
-        )
-        self.assertEqual(client.get.call_args.kwargs["params"], {"id": "9117807"})
 
     async def test_enrichment_does_not_fetch_arbitrary_source_or_weibo_login(self):
         service = SearchService({})

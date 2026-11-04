@@ -128,10 +128,10 @@ def test_result_count_setting_is_removed_from_schema():
 
 @pytest.mark.asyncio
 async def test_old_result_count_is_ignored_and_candidates_compared_before_slicing():
-    service = SearchService({"engines": ["google_lens"], "max_results": 10})
+    service = SearchService({"max_results": 10})
     first = post("one", "111", verified=True, engine="google_lens")
     second = post("two", "222", verified=True, engine="google_lens")
-    service._search_engine = AsyncMock(return_value=[first, second])
+    service._search_lens = AsyncMock(return_value=[first, second])
 
     async def enriched(result, image):
         return replace(result, relation_verified=result.account == "@two")
@@ -144,8 +144,8 @@ async def test_old_result_count_is_ignored_and_candidates_compared_before_slicin
 
 @pytest.mark.asyncio
 async def test_source_signature_can_resolve_against_actual_author_after_enrichment():
-    service = SearchService({"engines": ["google_lens"]})
-    service._search_engine = AsyncMock(
+    service = SearchService({})
+    service._search_lens = AsyncMock(
         return_value=[
             post("one", "111", verified=True, engine="google_lens"),
             post("old_handle", "222", verified=True, engine="google_lens"),
@@ -169,8 +169,8 @@ async def test_source_signature_can_resolve_against_actual_author_after_enrichme
 
 @pytest.mark.asyncio
 async def test_account_signature_does_not_promote_an_unmatched_recent_post():
-    service = SearchService({"engines": ["google_lens"]})
-    service._search_engine = AsyncMock(
+    service = SearchService({})
+    service._search_lens = AsyncMock(
         return_value=[
             SearchResult(
                 url="https://album.example/photo", title="作者：@artist", verified=True

@@ -18,7 +18,7 @@
       <circle cx="150" cy="416" r="28" fill="none" stroke="#193c47" stroke-width="7"/>
       <path d="m170 438 24 25" stroke="#193c47" stroke-width="9" stroke-linecap="round"/>
       <text x="231" y="417" font-size="48" font-weight="700">正在靓鸡甄选</text>
-      <text x="231" y="470" font-size="34" fill="#6b6253">完全匹配 · 没有命中再追查线索</text>
+      <text x="231" y="470" font-size="34" fill="#6b6253">Google Lens 完全匹配 · 追查 X 线索</text>
     </g>
     <path d="M600 499v35m-13-12 13 13 13-13" fill="none" stroke="#d88614" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
     <g id="results">

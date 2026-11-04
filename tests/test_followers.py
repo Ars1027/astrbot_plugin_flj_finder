@@ -62,10 +62,8 @@ async def test_nitter_follower_counts_resolve_multiple_unknown_accounts():
             side_effect=lambda handle: {"status": True, "user_name": handle}
         ),
     )
-    service = SearchService(
-        {"engines": ["google_lens"]}, twitter_api_provider=lambda: api
-    )
-    service._search_engine = AsyncMock(
+    service = SearchService({}, twitter_api_provider=lambda: api)
+    service._search_lens = AsyncMock(
         return_value=[SearchResult(url="https://source.example/photo", verified=True)]
     )
     recovery = RecoveryReport(
