@@ -1,6 +1,6 @@
 # 更新日志
 
-## 未发布 · 2026-11-04
+## v0.5.0 · 2026-11-04
 
 - 识图统一使用 Google Lens 完全匹配，支持直连和 SerpApi；删除百度、Ascii2D、SauceNAO，以及微博、B站的专用解析和元数据查询。
 - 移除 `engines`、`saucenao_api_key` 配置与命令行的 `--engines` 参数；旧配置统一使用 Google Lens。
