@@ -80,6 +80,7 @@ class RecoveryReport:
     source_pages: dict[str, str] = field(default_factory=dict)
     title_accounts_checked: int = 0
     title_accounts_found: int = 0
+    account_profiles: dict[str, dict] = field(default_factory=dict)
 
 
 def _merge_candidate(target: XCandidate, incoming: XCandidate) -> None:
@@ -735,6 +736,7 @@ async def recover_x(
                     ):
                         continue
                     report.title_accounts_found += 1
+                    report.account_profiles[handle.casefold()] = profile
                     host = _source_host(str(item.get("source_url") or ""))
                     add(
                         url,

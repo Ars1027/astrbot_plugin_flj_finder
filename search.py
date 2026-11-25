@@ -617,6 +617,7 @@ class SearchService:
         ]
         # Inspect a bounded shortlist before selecting the single displayed source.
         chosen = sorted(exact_x, key=_rank, reverse=True)[:3]
+        account_profiles: dict[str, dict] = {}
         if not chosen:
             source_items = sorted(
                 (
@@ -705,6 +706,7 @@ class SearchService:
                     )
                     report.errors.update(recovery.errors)
                     report.source_pages.update(recovery.source_pages)
+                    account_profiles = recovery.account_profiles
                     if title_extractor is not None:
                         report.title_llm.update(
                             checked=recovery.title_accounts_checked,
@@ -770,7 +772,9 @@ class SearchService:
                         accounts,
                         await asyncio.gather(
                             *(
-                                self._account_followers(account[1:])
+                                self._account_followers(
+                                    account[1:], account_profiles.get(account[1:])
+                                )
                                 for account in accounts
                             )
                         ),
@@ -791,7 +795,9 @@ class SearchService:
         report.results = [best] if best is not None else []
         return report
 
-    async def _account_followers(self, handle: str) -> int | None:
+    async def _account_followers(
+        self, handle: str, profile: dict | None = None
+    ) -> int | None:
         """Read candidate popularity without treating it as image evidence."""
 
         def count(value):
@@ -805,9 +811,8 @@ class SearchService:
 
         try:
             api = self.twitter_api_provider() if self.twitter_api_provider else None
-            if api is None:
-                return None
-            profile = await asyncio.wait_for(api.get_user_info(handle), timeout=3)
+            if profile is None and api is not None:
+                profile = await asyncio.wait_for(api.get_user_info(handle), timeout=3)
             if (
                 not isinstance(profile, dict)
                 or not profile.get("status")
