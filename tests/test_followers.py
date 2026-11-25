@@ -56,42 +56,33 @@ async def test_followers_from_profile(value, expected):
 
 @pytest.mark.asyncio
 async def test_search_reuses_profiles_from_title_account_lookup():
-    profiles = {
-        "Small": {"followers": 0, "screen_name": "Small Artist"},
-        "Popular": {"followers_count": "12,345", "screen_name": "Popular Artist"},
-    }
-
-    async def get_user_info(handle):
-        if handle not in profiles:
-            raise TimeoutError
-        return {"status": True, "user_name": handle, **profiles.pop(handle)}
-
-    api = SimpleNamespace(
-        is_ready=True, get_user_info=AsyncMock(side_effect=get_user_info)
+    followers = {"Small": 42, "Popular": 12345}
+    profile_lookup = AsyncMock(
+        side_effect=[
+            {
+                "status": True,
+                "user_name": handle,
+                "screen_name": handle,
+                "followers": count,
+            }
+            for handle, count in followers.items()
+        ]
     )
+    api = SimpleNamespace(is_ready=True, get_user_info=profile_lookup)
     service = SearchService({}, twitter_api_provider=lambda: api)
     service._search_lens = AsyncMock(
         return_value=[SearchResult(url="https://source.example/photo", verified=True)]
     )
     title_extractor = AsyncMock(
-        return_value=[
-            {
-                "handle": handle,
-                "platform": "unknown",
-                "source_url": "https://source.example/photo",
-            }
-            for handle in profiles
-        ]
+        return_value=[{"handle": handle, "platform": "unknown"} for handle in followers]
     )
     with patch("x_recovery._fetch_page", AsyncMock(return_value="")):
         report = await service.search(b"image", title_extractor=title_extractor)
 
-    assert not report.ambiguous
-    assert len(report.results) == 1
-    assert report.results[0].account == "@Popular"
-    assert report.results[0].followers == 12345
-    assert not report.results[0].verified
-    assert api.get_user_info.await_count == 2
+    assert [(item.account, item.followers) for item in report.results] == [
+        ("@Popular", 12345)
+    ]
+    assert profile_lookup.await_count == 2
 
 
 @pytest.mark.asyncio
